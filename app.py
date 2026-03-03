@@ -57,12 +57,10 @@ def extrair_dados_estilo_pc(pdf_file):
     texto_corrigido = ""
     for pg in reader.pages:
         t = pg.extract_text() or ""
-        # Aplica correção de espaçamento
         t = "\n".join(corrigir_espacamento_linha(l) for l in t.splitlines())
-        t = "\n".join(corrigir_espacamento_linha(l) for l in t.splitlines())
+        t = "\n".join(corrigir_espacamento_linha(l) for l in t.corrigido.splitlines()) if 'corrigido' in locals() else t
         texto_corrigido += t + "\n"
     
-    # Divisão em blocos por número de parada
     blocos = []
     bloco_atual = []
     for ln in texto_corrigido.splitlines():
@@ -80,7 +78,6 @@ def extrair_dados_estilo_pc(pdf_file):
         if not m_ord: continue
         
         resto = m_ord.group(2).strip()
-        # Remove hora HH:MM e normaliza CEP
         resto = re.sub(r"\b(\d{1,2}:\d{2})\b", "", resto)
         resto = normalizar_ceps(resto)
         
@@ -90,17 +87,16 @@ def extrair_dados_estilo_pc(pdf_file):
             endereco = resto[:end_cep].strip().rstrip(",")
             nome_nota = resto[end_cep:].strip()
             
-            # --- LÓGICA DO SCRIPT 2 (CLIENTES.PY) ---
-            # Limpeza de Endereço: Remove número antes do primeiro ' - '
+            # --- LIMPEZA E FILTRO DE "NONE" ---
             endereco_limpo = re.sub(r'^(.*?),\s*\d+\s*-', r'\1 -', endereco)
-            # Limpeza de Nome: Remove [] mas mantém ()
             nome_limpo = re.sub(r'\s*\[.*?\]', '', nome_nota).strip()
             
-            if nome_limpo:
-                dados_finais.append({"Nome": nome_limpo, "Endereco": endereco_limpo})
+            # FILTRO: Só adiciona se o nome não for vazio e não for a palavra "None"
+            if nome_limpo and nome_limpo.lower() != "none":
+                dados_finais.append({"Nome": nome_limpo.upper(), "Endereco": endereco_limpo})
     return dados_finais
 
-# --- 2) FUNÇÃO DO SCRIPT 3 (ETIQUETAS.PY) ---
+# --- 2) GERAÇÃO DO PDF ---
 
 def criar_pdf_etiquetas(df, pdf_modelo_file):
     largura, altura = 100 * mm, 150 * mm
@@ -109,10 +105,13 @@ def criar_pdf_etiquetas(df, pdf_modelo_file):
     pdf_final_writer = PdfWriter()
 
     for _, row in df.iterrows():
+        # Pula a geração se por algum motivo o nome for None ou vazio
+        if not row['Nome'] or str(row['Nome']).lower() == "none":
+            continue
+
         packet = BytesIO()
         can = canvas.Canvas(packet, pagesize=portrait((largura, altura)))
         
-        # Coordenadas exatas do seu PC: 38mm horizontal, 200 vertical (pontos)
         can.setFont("Helvetica-Bold", 9)
         can.drawString(38 * mm, 200, str(row['Nome']))
 
@@ -138,31 +137,31 @@ def criar_pdf_etiquetas(df, pdf_modelo_file):
     pdf_final_writer.write(pdf_saida)
     return pdf_saida.getvalue()
 
-# --- 3) INTERFACE DO SITE (FLUXO) ---
+# --- 3) INTERFACE ---
 
 if 'clientes_data' not in st.session_state:
     st.session_state.clientes_data = None
 
-col1, col2 = st.columns(2)
-with col1:
+c1, c2 = st.columns(2)
+with c1:
     arq_circuit = st.file_uploader("📁 PDF do Circuit", type="pdf")
-with col2:
+with c2:
     arq_modelo = st.file_uploader("🖼️ Modelo Etiqueta.pdf", type="pdf")
 
 if arq_circuit and arq_modelo:
-    if st.button("🔍 Extrair Dados (Lógica do PC)", use_container_width=True):
+    if st.button("🔍 Extrair Dados", use_container_width=True):
         res = extrair_dados_estilo_pc(arq_circuit)
         if res:
             st.session_state.clientes_data = pd.DataFrame(res)
-            st.success(f"Sucesso! Encontradas {len(res)} paradas.")
+            st.success(f"Sucesso! {len(res)} etiquetas identificadas.")
         else:
-            st.error("Não foi possível identificar o padrão de CEP/Endereço no PDF.")
+            st.error("Nenhum dado válido encontrado.")
 
 if st.session_state.clientes_data is not None:
-    st.info("💡 Revise os nomes e endereços abaixo antes de gerar o PDF.")
+    # Mostra a tabela - agora sem a linha "None"
     df_editado = st.data_editor(st.session_state.clientes_data, num_rows="dynamic", use_container_width=True)
 
-    if st.button("🚀 Gerar PDF Único de Etiquetas", type="primary", use_container_width=True):
-        with st.spinner("Criando arquivo de impressão..."):
+    if st.button("🚀 Gerar PDF Único", type="primary", use_container_width=True):
+        with st.spinner("Limpando e gerando PDF..."):
             pdf_pronto = criar_pdf_etiquetas(df_editado, arq_modelo)
-            st.download_button("📥 BAIXAR ETIQUETAS", data=pdf_pronto, file_name="etiquetas.pdf", mime="application/pdf", use_container_width=True)
+            st.download_button("📥 BAIXAR ETIQUETAS", data=pdf_pronto, file_name="etiquetas_finais.pdf", mime="application/pdf", use_container_width=True)
