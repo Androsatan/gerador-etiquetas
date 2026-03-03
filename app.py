@@ -8,45 +8,45 @@ from reportlab.lib.units import mm
 from io import BytesIO
 
 # Configuração da Interface
-st.set_page_config(page_title="Editor de Etiquetas Sara Lin", page_icon="📝", layout="wide")
+st.set_page_config(page_title="Gerador de Etiquetas Sara Lin", page_icon="📝", layout="wide")
 st.title("📝 Gerador de Etiquetas Profissional")
-st.write("Confira os dados na tabela antes de gerar o PDF único.")
+st.write("Confira os dados na tabela. Colchetes [] serão removidos e parênteses () mantidos.")
 
-# --- FUNÇÕES DE EXTRAÇÃO ---
+# --- FUNÇÃO DE EXTRAÇÃO ROBUSTA ---
 
-def extrair_dados_do_pdf(pdf_file):
+def extrair_dados_v3(pdf_file):
     reader = PdfReader(pdf_file)
     texto_bruto = ""
     for page in reader.pages:
-        texto_bruto += page.extract_text() or ""
+        texto_bruto += page.extract_text() + "\n"
     
-    # Normaliza as aspas (alguns PDFs usam aspas curvas)
-    texto_limpo = texto_bruto.replace('“', '"').replace('”', '"').replace('„', '"')
+    # Limpeza 1: Transforma o PDF em uma linha única, removendo quebras de linha chatas
+    texto_limpo = texto_bruto.replace('\n', ' ')
+    texto_limpo = re.sub(r'\s+', ' ', texto_limpo)
     
-    # REGEX FLEXÍVEL: 
-    # Procura por 4 blocos de texto entre aspas, ignorando quebras de linha e espaços extras
-    # Grupo 1: Número | Grupo 2: Endereço | Grupo 3: Hora | Grupo 4: Notas (Nome)
+    # REGEX V3: Procura o padrão "Número" , "Endereço" , "Hora" , "Notas"
+    # É mais flexível com espaços e vírgulas extras
     pattern = re.compile(r'"\s*(\d+)\s*"[\s,]*?"\s*([\s\S]*?)\s*"[\s,]*?"\s*([\s\S]*?)\s*"[\s,]*?"\s*([\s\S]*?)\s*"')
     matches = pattern.findall(texto_limpo)
     
     dados = []
     for m in matches:
-        # Limpa as quebras de linha internas que o PDF gera
-        endereco_bruto = m[1].replace('\n', ' ').strip()
-        nota_bruto = m[3].replace('\n', ' ').strip()
+        # m[0]=Nº Parada, m[1]=Endereço, m[2]=Hora, m[3]=Notas (Nome)
+        end_pdf = m[1].strip()
+        nota_pdf = m[3].strip()
 
-        # 1. Regra de Limpeza: Remove [] mas MANTÉM ()
-        nome_limpo = re.sub(r'\[.*?\]', '', nota_bruto)
+        # 1. Limpeza do Nome (Remove [] e mantém ())
+        nome_limpo = re.sub(r'\[.*?\]', '', nota_pdf)
         nome_limpo = re.sub(r'\s+', ' ', nome_limpo).strip()
         
-        # 2. Limpeza do Endereço
-        end_limpo = endereco_bruto.replace(', Belo Horizonte', '').replace(', Minas Gerais', '').replace(', MG', '')
-        # Formata o CEP para ter um traço padrão
+        # 2. Limpeza do Endereço (Simplifica para a etiqueta)
+        end_limpo = end_pdf.replace(', Belo Horizonte', '').replace(', Minas Gerais', '')
+        # Formata o CEP com traço se necessário
         end_limpo = re.sub(r',\s*(\d{5})', r' - \1', end_limpo)
         
         if nome_limpo:
             dados.append({"Nome": nome_limpo, "Endereco": end_limpo})
-            
+    
     return dados
 
 def gerar_pdf_final(df, pdf_modelo):
@@ -59,11 +59,11 @@ def gerar_pdf_final(df, pdf_modelo):
         packet = BytesIO()
         can = canvas.Canvas(packet, pagesize=portrait((largura, altura)))
         
-        # Nome do Cliente (MAIÚSCULO e Negrito)
+        # Nome do Cliente
         can.setFont("Helvetica-Bold", 10)
         can.drawString(38 * mm, 70.5 * mm, str(row['Nome']).upper())
         
-        # Endereço (Tenta quebrar em duas linhas se houver vírgula)
+        # Endereço (Tenta quebrar em duas linhas para não cortar)
         can.setFont("Helvetica", 9)
         end = str(row['Endereco'])
         if "," in end:
@@ -91,35 +91,26 @@ def gerar_pdf_final(df, pdf_modelo):
 if 'tabela_clientes' not in st.session_state:
     st.session_state.tabela_clientes = None
 
-col1, col2 = st.columns(2)
-with col1:
+c1, c2 = st.columns(2)
+with c1:
     arq_rota = st.file_uploader("1. PDF do Circuit", type="pdf")
-with col2:
+with c2:
     arq_modelo = st.file_uploader("2. PDF Modelo (Etiqueta)", type="pdf")
 
 if arq_rota and arq_modelo:
-    if st.button("🔍 Extrair e Conferir Dados", use_container_width=True):
-        extraido = extrair_dados_do_pdf(arq_rota)
+    if st.button("🔍 Extrair Dados do PDF", use_container_width=True):
+        extraido = extrair_dados_v3(arq_rota)
         if extraido:
             st.session_state.tabela_clientes = pd.DataFrame(extraido)
-            st.success(f"Sucesso! Encontradas {len(extraido)} paradas.")
+            st.success(f"Encontradas {len(extraido)} paradas!")
         else:
-            st.error("Erro: Não encontrei os nomes no PDF. Verifique se é o arquivo original.")
+            st.error("Nenhum dado encontrado. Verifique se o PDF está no formato original do Circuit.")
 
 if st.session_state.tabela_clientes is not None:
-    st.markdown("### 📝 Revise os dados abaixo")
-    st.caption("Dica: Se algo vier errado, você pode clicar na célula e corrigir antes de gerar o PDF.")
-    
-    # Tabela editável
+    st.markdown("### 📝 Revise e edite os dados")
     df_editado = st.data_editor(st.session_state.tabela_clientes, num_rows="dynamic", use_container_width=True)
 
     if st.button("🚀 Gerar PDF Único de Etiquetas", type="primary", use_container_width=True):
-        with st.spinner("Unificando etiquetas em um único PDF..."):
+        with st.spinner("Criando arquivo de impressão..."):
             pdf_final = gerar_pdf_final(df_editado, arq_modelo)
-            st.download_button(
-                "📥 BAIXAR PDF DE IMPRESSÃO", 
-                data=pdf_final, 
-                file_name="etiquetas_unificadas.pdf", 
-                mime="application/pdf", 
-                use_container_width=True
-            )
+            st.download_button("📥 BAIXAR PDF DE IMPRESSÃO", data=pdf_final, file_name="etiquetas_sara_lin.pdf", mime="application/pdf", use_container_width=True)
