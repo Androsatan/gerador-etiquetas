@@ -9,9 +9,9 @@ from io import BytesIO
 
 # Configuração da Interface
 st.set_page_config(page_title="Editor de Etiquetas", page_icon="📝", layout="wide")
-st.title("📝 Gerador de Etiquetas e Rota Profissional")
+st.title("📝 Gerador de Etiquetas Profissional")
 
-# --- 1) FUNÇÕES DE CORREÇÃO E EXTRAÇÃO (LÓGICA PC) ---
+# --- FUNÇÕES DE APOIO (LÓGICA PC) ---
 
 def corrigir_espacamento_linha(linha: str) -> str:
     tokens = linha.split(" ")
@@ -87,9 +87,7 @@ def extrair_dados_completos(pdf_file):
             endereco_original = resto[:end_cep].strip().rstrip(",")
             nome_original = resto[end_cep:].strip()
             
-            # Limpeza para Etiqueta: Remove [] e mantém ()
             nome_etiqueta = re.sub(r'\[.*?\]', '', nome_original).strip()
-            # Limpeza para Etiqueta: Remove número da residência antes do ' - '
             endereco_etiqueta = re.sub(r'^(.*?),\s*\d+\s*-', r'\1 -', endereco_original)
             
             if nome_original and nome_original.lower() != "none":
@@ -101,8 +99,6 @@ def extrair_dados_completos(pdf_file):
                 })
     return dados
 
-# --- 2) GERAÇÃO DO PDF ---
-
 def gerar_pdf_etiquetas(df, pdf_modelo_file):
     largura, altura = 100 * mm, 150 * mm
     modelo_reader = PdfReader(pdf_modelo_file)
@@ -112,10 +108,8 @@ def gerar_pdf_etiquetas(df, pdf_modelo_file):
     for _, row in df.iterrows():
         packet = BytesIO()
         can = canvas.Canvas(packet, pagesize=portrait((largura, altura)))
-        
         can.setFont("Helvetica-Bold", 9)
         can.drawString(38 * mm, 200, str(row['Nome Etiqueta']))
-
         can.setFont("Helvetica", 8)
         end = str(row['Endereco Etiqueta'])
         if "MG," in end:
@@ -124,10 +118,8 @@ def gerar_pdf_etiquetas(df, pdf_modelo_file):
             can.drawString(9 * mm, 175, partes[1].strip())
         else:
             can.drawString(9 * mm, 182, end)
-        
         can.save()
         packet.seek(0)
-        
         overlay = PdfReader(packet).pages[0]
         saida_pag = PageObject.create_blank_page(width=largura, height=altura)
         saida_pag.merge_page(modelo_pagina)
@@ -138,44 +130,83 @@ def gerar_pdf_etiquetas(df, pdf_modelo_file):
     pdf_final_writer.write(pdf_saida)
     return pdf_saida.getvalue()
 
-# --- 3) INTERFACE ---
+# --- INTERFACE ---
 
-if 'clientes_df' not in st.session_state:
-    st.session_state.clientes_df = None
+# Inicialização do estado
+if 'lista_clientes' not in st.session_state:
+    st.session_state.lista_clientes = []
 
+# --- 1) ENTRADA MANUAL ---
+st.subheader("➕ Adicionar Cliente Manualmente")
+with st.expander("Clique para abrir o formulário manual"):
+    col_m1, col_m2 = st.columns(2)
+    with col_m1:
+        m_nome = st.text_input("Nome do Cliente (ex: JOÃO [KK] (2PCT))")
+    with col_m2:
+        m_end = st.text_input("Endereço Completo (ex: Rua Exemplo, 10, Bairro, Cidade, CEP)")
+    
+    if st.button("Adicionar à Lista"):
+        if m_nome and m_end:
+            # Aplica as mesmas regras de limpeza do PDF
+            nome_limpo = re.sub(r'\[.*?\]', '', m_nome).strip().upper()
+            end_limpo = re.sub(r'^(.*?),\s*\d+\s*-', r'\1 -', m_end)
+            
+            st.session_state.lista_clientes.append({
+                "Nome Original": m_nome,
+                "Endereco Original": m_end,
+                "Nome Etiqueta": nome_limpo,
+                "Endereco Etiqueta": end_limpo
+            })
+            st.success(f"Cliente {m_nome} adicionado!")
+        else:
+            st.warning("Preencha nome e endereço.")
+
+st.markdown("---")
+
+# --- 2) UPLOAD DE ARQUIVO ---
+st.subheader("📂 Upload Automático (Circuit)")
 c1, c2 = st.columns(2)
 with c1:
-    arq_circuit = st.file_uploader("📁 PDF do Circuit", type="pdf")
+    arq_circuit = st.file_uploader("Subir Circuit.pdf", type="pdf")
 with c2:
-    arq_modelo = st.file_uploader("🖼️ Modelo Etiqueta.pdf", type="pdf")
+    arq_modelo = st.file_uploader("Modelo Etiqueta.pdf", type="pdf")
 
-if arq_circuit and arq_modelo:
-    if st.button("🔍 Extrair Dados do PDF", use_container_width=True):
+if arq_circuit:
+    if st.button("🔍 Extrair Dados do PDF"):
         res = extrair_dados_completos(arq_circuit)
         if res:
-            st.session_state.clientes_df = pd.DataFrame(res)
-            st.success(f"Sucesso! {len(res)} paradas extraídas.")
+            # Adiciona os novos dados à lista existente (sem apagar os manuais)
+            st.session_state.lista_clientes.extend(res)
+            st.success(f"Mais {len(res)} paradas adicionadas do PDF!")
 
-if st.session_state.clientes_df is not None:
-    # --- FUNÇÃO COPIAR ROTA ---
+# --- 3) EXIBIÇÃO E AÇÕES ---
+if st.session_state.lista_clientes:
+    df_atual = pd.DataFrame(st.session_state.lista_clientes)
+
+    # Botão para limpar tudo
+    if st.button("🗑️ Limpar Toda a Lista"):
+        st.session_state.lista_clientes = []
+        st.rerun()
+
     st.markdown("---")
-    rota_texto = ""
-    for _, row in st.session_state.clientes_df.iterrows():
-        rota_texto += f"{row['Endereco Original']}\n{row['Nome Original']}\n\n"
     
-    st.subheader("📋 Rota para o Entregador")
-    st.caption("O texto abaixo contém tudo (inclusive [] e ()). Use o botão no canto superior direito do bloco para copiar.")
+    # ROTA PARA COPIAR
+    st.subheader("📋 Rota para o Entregador (Original)")
+    rota_texto = ""
+    for c in st.session_state.lista_clientes:
+        rota_texto += f"{c['Endereco Original']}\n{c['Nome Original']}\n\n"
     st.code(rota_texto, language="text")
 
     st.markdown("---")
-    st.subheader("🏷️ Edição para Etiquetas")
-    st.caption("Aqui os [] já foram removidos. O que você editar aqui será o que sairá impresso no PDF.")
     
-    # Editor da tabela (apenas campos da etiqueta)
-    df_para_editar = st.session_state.clientes_df[["Nome Etiqueta", "Endereco Etiqueta"]]
-    df_editado = st.data_editor(df_para_editar, num_rows="dynamic", use_container_width=True)
+    # EDIÇÃO PARA ETIQUETAS
+    st.subheader("🏷️ Conferência para Etiquetas (Sem [])")
+    df_editado = st.data_editor(df_atual[["Nome Etiqueta", "Endereco Etiqueta"]], num_rows="dynamic", use_container_width=True)
 
-    if st.button("🚀 Gerar PDF de Etiquetas (Sem [])", type="primary", use_container_width=True):
-        with st.spinner("Gerando PDF..."):
-            pdf_pronto = gerar_pdf_etiquetas(df_editado, arq_modelo)
-            st.download_button("📥 BAIXAR PDF ÚNICO", data=pdf_pronto, file_name="etiquetas_finais.pdf", mime="application/pdf", use_container_width=True)
+    if arq_modelo:
+        if st.button("🚀 Gerar PDF Único de Etiquetas", type="primary", use_container_width=True):
+            with st.spinner("Gerando arquivo..."):
+                pdf_pronto = gerar_pdf_etiquetas(df_editado, arq_modelo)
+                st.download_button("📥 BAIXAR PDF FINAL", data=pdf_pronto, file_name="etiquetas_finais.pdf", mime="application/pdf", use_container_width=True)
+    else:
+        st.info("⚠️ Suba o 'Modelo Etiqueta.pdf' para habilitar a geração do PDF.")
