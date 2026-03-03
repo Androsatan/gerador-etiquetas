@@ -10,7 +10,7 @@ from io import BytesIO
 # Configuração da Interface
 st.set_page_config(page_title="Editor de Etiquetas", page_icon="📝", layout="wide")
 st.title("📝 Gerador de Etiquetas com Conferência")
-st.write("1. Suba os arquivos | 2. Confira e edite os dados | 3. Gere o PDF final")
+st.write("1. Suba os arquivos | 2. Confira os dados | 3. Gere o PDF único")
 
 # --- FUNÇÕES DE APOIO ---
 
@@ -20,30 +20,35 @@ def extrair_dados_do_pdf(pdf_file):
     for page in reader.pages:
         texto_bruto += page.extract_text() or ""
     
-    # Passo essencial: Remove quebras de linha internas para o Regex não falhar
-    texto_limpo = texto_bruto.replace('\n', ' ')
+    # LIMPEZA FUNDAMENTAL: Remove aspas e quebras de linha que bugam o reconhecimento
+    texto_limpo = texto_bruto.replace('"', '').replace('\n', ' ')
     texto_limpo = re.sub(r'\s+', ' ', texto_limpo)
     
-    # NOVO REGEX: Captura Número, Endereço, Hora e Nota (Nome) entre aspas
-    # "(\d+)" -> Número | "(.*?)" -> Endereço | ".*?" -> Hora (ignorado) | "(.*?)" -> Notas
-    pattern = re.compile(r'"\s*(\d+)\s*"[\s,]*?"\s*([\s\S]*?)\s*"[\s,]*?"\s*[\s\S]*?\s*"[\s,]*?"\s*([\s\S]*?)\s*"')
+    # REGEX: Baseada na estrutura que você enviou e que funciona
+    # Procura: Número | Endereço | CEP | Notas
+    pattern = re.compile(r"(\d+)\s+(.*?)\s+(\d{5}-\d{3})(.*?)(?=\d+\s+|$)", re.DOTALL)
     matches = pattern.findall(texto_limpo)
     
     dados = []
     for m in matches:
-        # m[1] é o endereço, m[2] é a nota (onde está o nome)
-        end_pdf = m[1].strip()
-        nota_pdf = m[2].strip()
-
-        # Limpeza do Endereço (remover cidade e estado redundantes)
-        end_limpo = end_pdf.replace(', Belo Horizonte', '').replace(', Minas Gerais', '').replace(', MG', '')
+        # m[1] = endereço completo | m[3] = notas (onde está o nome e horário)
+        endereco_bruto = f"{m[1]} {m[2]}".strip()
+        nota_bruta = m[3].strip()
         
-        # Limpeza do Nome: Remove [] mas MANTÉM ()
-        nome_limpo = re.sub(r'\[.*?\]', '', nota_pdf)
-        nome_limpo = re.sub(r'\s+', ' ', nome_limpo).strip()
+        # Limpeza do Nome: 
+        # 1. Remove horários (ex: 18:40) que ficam grudados no nome
+        nome_limpo = re.sub(r'\d{1,2}:\d{2}', '', nota_bruta)
+        # 2. Remove o que estiver em colchetes []
+        nome_limpo = re.sub(r'\[.*?\]', '', nome_limpo)
+        # 3. Remove vírgulas e espaços que sobraram no início/fim
+        nome_limpo = nome_limpo.replace(',', '').strip()
         
-        if nome_limpo: # Só adiciona se o nome não for vazio
-            dados.append({"Nome": nome_limpo, "Endereco": end_limpo})
+        # Limpeza do Endereço (Removendo Belo Horizonte e MG para caber na etiqueta)
+        end_limpo = endereco_bruto.replace(', Belo Horizonte', '').replace(', Minas Gerais', '').replace(', MG', '')
+        
+        if nome_limpo:
+            dados.append({"Nome": nome_limpo.upper(), "Endereco": end_limpo})
+            
     return dados
 
 def criar_pdf_etiquetas(df, pdf_modelo):
@@ -56,20 +61,19 @@ def criar_pdf_etiquetas(df, pdf_modelo):
         packet = BytesIO()
         can = canvas.Canvas(packet, pagesize=portrait((largura, altura)))
         
-        # --- POSICIONAMENTO DO NOME ---
-        # 38mm da esquerda, 70.5mm da base (ajuste aqui se precisar subir ou descer)
-        can.setFont("Helvetica-Bold", 9)
-        can.drawString(38 * mm, 70.5 * mm, str(row['Nome']).upper())
+        # Nome do Cliente (Negrito e Maiúsculo)
+        can.setFont("Helvetica-Bold", 10)
+        can.drawString(38 * mm, 70.5 * mm, str(row['Nome']))
         
-        # --- POSICIONAMENTO DO ENDEREÇO ---
-        can.setFont("Helvetica", 8)
+        # Endereço (Dividido em duas linhas se for muito longo)
+        can.setFont("Helvetica", 9)
         end = str(row['Endereco'])
         if "," in end:
             partes = end.split(",", 1)
             can.drawString(9 * mm, 64 * mm, partes[0].strip())
             can.drawString(9 * mm, 60 * mm, partes[1].strip())
         else:
-            can.drawString(9 * mm, 64 * mm, end)
+            can.drawString(9 * mm, 62 * mm, end)
         
         can.save()
         packet.seek(0)
@@ -89,10 +93,10 @@ def criar_pdf_etiquetas(df, pdf_modelo):
 if 'dados_extraidos' not in st.session_state:
     st.session_state.dados_extraidos = None
 
-col1, col2 = st.columns(2)
-with col1:
+c1, c2 = st.columns(2)
+with c1:
     arq_circuit = st.file_uploader("📁 PDF do Circuit", type="pdf")
-with col2:
+with c2:
     arq_modelo = st.file_uploader("🖼️ PDF Modelo (Etiqueta)", type="pdf")
 
 if arq_circuit and arq_modelo:
@@ -100,24 +104,21 @@ if arq_circuit and arq_modelo:
         res = extrair_dados_do_pdf(arq_circuit)
         if res:
             st.session_state.dados_extraidos = pd.DataFrame(res)
-            st.success(f"Encontradas {len(res)} etiquetas!")
+            st.success(f"Sucesso! Encontradas {len(res)} etiquetas.")
         else:
-            st.error("Não encontrei dados. Verifique se o PDF é o original do Circuit.")
+            st.error("Não encontrei dados. O PDF pode estar em um formato protegido ou sem o padrão esperado.")
 
 if st.session_state.dados_extraidos is not None:
-    st.info("💡 Dica: Clique em qualquer célula abaixo para corrigir o texto se algo veio bugado.")
+    st.info("💡 Revise a tabela abaixo. Se o nome estiver errado, você pode clicar e editar aqui mesmo.")
     
-    df_editado = st.data_editor(
-        st.session_state.dados_extraidos,
-        num_rows="dynamic",
-        use_container_width=True
-    )
+    # Tabela Editável
+    df_editado = st.data_editor(st.session_state.dados_extraidos, num_rows="dynamic", use_container_width=True)
 
-    if st.button("🚀 2. Gerar PDF Final", type="primary", use_container_width=True):
-        with st.spinner("Gerando arquivo de impressão..."):
+    if st.button("🚀 2. Gerar PDF Final de Impressão", type="primary", use_container_width=True):
+        with st.spinner("Gerando arquivo..."):
             pdf_pronto = criar_pdf_etiquetas(df_editado, arq_modelo)
             st.download_button(
-                label="📥 BAIXAR ETIQUETAS PARA IMPRIMIR",
+                label="📥 BAIXAR ETIQUETAS",
                 data=pdf_pronto,
                 file_name="etiquetas_revisadas.pdf",
                 mime="application/pdf",
