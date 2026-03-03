@@ -8,7 +8,7 @@ from reportlab.lib.units import mm
 from io import BytesIO
 
 # Configuração da Interface
-st.set_page_config(page_title="Sara Lin - Editor de Etiquetas", page_icon="📝", layout="wide")
+st.set_page_config(page_title="Editor de Etiquetas", page_icon="📝", layout="wide")
 st.title("📝 Gerador de Etiquetas com Conferência")
 st.write("1. Suba os arquivos | 2. Confira e edite os dados | 3. Gere o PDF final")
 
@@ -16,24 +16,34 @@ st.write("1. Suba os arquivos | 2. Confira e edite os dados | 3. Gere o PDF fina
 
 def extrair_dados_do_pdf(pdf_file):
     reader = PdfReader(pdf_file)
-    texto = ""
+    texto_bruto = ""
     for page in reader.pages:
-        texto += page.extract_text() or ""
+        texto_bruto += page.extract_text() or ""
     
-    # Regex baseada na sua estrutura do Circuit
-    pattern = re.compile(r"(\d+)\s+(.*?)\s+(\d{5}-\d{3})(.*?)(?=\d+\s+|$)", re.DOTALL)
-    matches = pattern.findall(texto)
+    # Passo essencial: Remove quebras de linha internas para o Regex não falhar
+    texto_limpo = texto_bruto.replace('\n', ' ')
+    texto_limpo = re.sub(r'\s+', ' ', texto_limpo)
+    
+    # NOVO REGEX: Captura Número, Endereço, Hora e Nota (Nome) entre aspas
+    # "(\d+)" -> Número | "(.*?)" -> Endereço | ".*?" -> Hora (ignorado) | "(.*?)" -> Notas
+    pattern = re.compile(r'"\s*(\d+)\s*"[\s,]*?"\s*([\s\S]*?)\s*"[\s,]*?"\s*[\s\S]*?\s*"[\s,]*?"\s*([\s\S]*?)\s*"')
+    matches = pattern.findall(texto_limpo)
     
     dados = []
     for m in matches:
-        endereco_bruto = f"{m[1]} {m[2]}".strip()
-        nota = m[3].strip()
+        # m[1] é o endereço, m[2] é a nota (onde está o nome)
+        end_pdf = m[1].strip()
+        nota_pdf = m[2].strip()
+
+        # Limpeza do Endereço (remover cidade e estado redundantes)
+        end_limpo = end_pdf.replace(', Belo Horizonte', '').replace(', Minas Gerais', '').replace(', MG', '')
         
-        # Lógica de limpeza original (2CLIENTES)
-        end_limpo = re.sub(r'^(.*?),\s*\d+\s*-', r'\1 -', endereco_bruto)
-        nome_limpo = re.sub(r'\s*\[.*?\]', '', nota).strip()
+        # Limpeza do Nome: Remove [] mas MANTÉM ()
+        nome_limpo = re.sub(r'\[.*?\]', '', nota_pdf)
+        nome_limpo = re.sub(r'\s+', ' ', nome_limpo).strip()
         
-        dados.append({"Nome": nome_limpo, "Endereco": end_limpo})
+        if nome_limpo: # Só adiciona se o nome não for vazio
+            dados.append({"Nome": nome_limpo, "Endereco": end_limpo})
     return dados
 
 def criar_pdf_etiquetas(df, pdf_modelo):
@@ -46,19 +56,18 @@ def criar_pdf_etiquetas(df, pdf_modelo):
         packet = BytesIO()
         can = canvas.Canvas(packet, pagesize=portrait((largura, altura)))
         
-        # Nome
+        # --- POSICIONAMENTO DO NOME ---
+        # 38mm da esquerda, 70.5mm da base (ajuste aqui se precisar subir ou descer)
         can.setFont("Helvetica-Bold", 9)
-        can.drawString(38 * mm, 70.5 * mm, str(row['Nome']))
+        can.drawString(38 * mm, 70.5 * mm, str(row['Nome']).upper())
         
-        # Endereço
+        # --- POSICIONAMENTO DO ENDEREÇO ---
         can.setFont("Helvetica", 8)
         end = str(row['Endereco'])
-        if "MG," in end:
-            partes = end.split("MG,", 1)
-            linha1 = partes[0].strip() + " MG"
-            linha2 = partes[1].strip()
-            can.drawString(9 * mm, 65 * mm, linha1)
-            can.drawString(9 * mm, 62 * mm, linha2)
+        if "," in end:
+            partes = end.split(",", 1)
+            can.drawString(9 * mm, 64 * mm, partes[0].strip())
+            can.drawString(9 * mm, 60 * mm, partes[1].strip())
         else:
             can.drawString(9 * mm, 64 * mm, end)
         
@@ -77,7 +86,6 @@ def criar_pdf_etiquetas(df, pdf_modelo):
 
 # --- FLUXO DO SITE ---
 
-# Inicializa o estado se não existir
 if 'dados_extraidos' not in st.session_state:
     st.session_state.dados_extraidos = None
 
@@ -88,35 +96,26 @@ with col2:
     arq_modelo = st.file_uploader("🖼️ PDF Modelo (Etiqueta)", type="pdf")
 
 if arq_circuit and arq_modelo:
-    # BOTÃO 1: EXTRAIR
     if st.button("🔍 1. Extrair e Revisar Texto", use_container_width=True):
         res = extrair_dados_do_pdf(arq_circuit)
         if res:
             st.session_state.dados_extraidos = pd.DataFrame(res)
+            st.success(f"Encontradas {len(res)} etiquetas!")
         else:
-            st.error("Não encontrei dados. Verifique se o PDF é o correto.")
+            st.error("Não encontrei dados. Verifique se o PDF é o original do Circuit.")
 
-# Se já extraiu, mostra a tabela editável
 if st.session_state.dados_extraidos is not None:
-    st.info("💡 Dica: Clique em qualquer célula abaixo para corrigir nomes ou endereços bugados.")
+    st.info("💡 Dica: Clique em qualquer célula abaixo para corrigir o texto se algo veio bugado.")
     
-    # TABELA EDITÁVEL
     df_editado = st.data_editor(
         st.session_state.dados_extraidos,
         num_rows="dynamic",
-        use_container_width=True,
-        column_config={
-            "Nome": st.column_config.TextColumn("Nome do Cliente", width="medium"),
-            "Endereco": st.column_config.TextColumn("Endereço Completo", width="large"),
-        }
+        use_container_width=True
     )
 
-    # BOTÃO 2: GERAR ETIQUETAS
-    if st.button("🚀 2. Gerar PDF Final com os dados acima", type="primary", use_container_width=True):
-        with st.spinner("Gerando etiquetas..."):
+    if st.button("🚀 2. Gerar PDF Final", type="primary", use_container_width=True):
+        with st.spinner("Gerando arquivo de impressão..."):
             pdf_pronto = criar_pdf_etiquetas(df_editado, arq_modelo)
-            
-            st.success("✅ PDF Gerado com sucesso!")
             st.download_button(
                 label="📥 BAIXAR ETIQUETAS PARA IMPRIMIR",
                 data=pdf_pronto,
