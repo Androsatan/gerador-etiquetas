@@ -9,7 +9,7 @@ from io import BytesIO
 
 # Configuração da Interface
 st.set_page_config(page_title="Editor de Etiquetas", page_icon="📝", layout="wide")
-st.title("📝 Gerador de Etiquetas Profissional")
+st.title("📝 Gerador de Etiquetas")
 
 # --- FUNÇÕES DE APOIO (LÓGICA PC) ---
 
@@ -141,7 +141,7 @@ st.subheader("➕ Adicionar Cliente Manualmente")
 with st.expander("Clique para abrir o formulário manual"):
     col_m1, col_m2 = st.columns(2)
     with col_m1:
-        m_nome = st.text_input("Nome do Cliente (ex: JOÃO [KK] (2PCT))")
+        m_nome = st.text_input("Nome do Cliente (ex: JOÃO [ZZ] (2PCT))")
     with col_m2:
         m_end = st.text_input("Endereço Completo (ex: Rua Exemplo, 10, Bairro, Cidade, CEP)")
     
@@ -200,13 +200,14 @@ if st.session_state.lista_clientes:
     st.markdown("---")
     
     # EDIÇÃO PARA ETIQUETAS
-    st.subheader("🏷️ Conferência para Etiquetas (Sem [])")
+    st.subheader("🏷️ Conferência para Etiquetas")
     df_editado = st.data_editor(df_atual[["Nome Etiqueta", "Endereco Etiqueta"]], num_rows="dynamic", use_container_width=True)
 
     if arq_modelo:
         if st.button("🚀 Gerar PDF Único de Etiquetas", type="primary", use_container_width=True):
             with st.spinner("Gerando arquivo..."):
                 pdf_pronto = gerar_pdf_etiquetas(df_editado, arq_modelo)
-                st.download_button("📥 BAIXAR PDF FINAL", data=pdf_pronto, file_name="etiquetas_finais.pdf", mime="application/pdf", use_container_width=True)
+                st.download_button("📥 BAIXAR PDF FINAL", data=pdf_pronto, file_name="etiquetas.pdf", mime="application/pdf", use_container_width=True)
     else:
         st.info("⚠️ Suba o 'Modelo Etiqueta.pdf' para habilitar a geração do PDF.")
+
